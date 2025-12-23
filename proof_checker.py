@@ -121,11 +121,20 @@ class Formula:
         * ∀xA is a formula
         – Nothing else is a formula.
     '''
-    def __init__(self, op=None, left=None, right=None, idx=-1):
+    def __init__(self, op=None, left=None, right=None, var_idx=-1):
+        '''
+        Docstring for __init__
+        
+        :param self: Description
+        :param op: Description
+        :param left: Description
+        :param right: Description
+        :param var_idx: -1 if there if current Formula is not a variable, index i representing vf_i otherwise where vf_i is a Formula variable
+        '''
         self.op = op
         self.left = left
         self.right = right
-        self.idx = idx
+        self.var_idx = var_idx
         self.validate_formula()
     
     def validate_formula(self):
@@ -137,15 +146,20 @@ class Formula:
         '''
         is_valid = False
         if self.op is None:
-            if self.idx > -1:
+            if self.var_idx > -1:
                 is_valid = isinstance(self, FormulaVar) and self.op is None and self.left is None and self.right is None
             else:
                 raise ValueError(f"Formula variable {self} must have an Formula Variable index > -1")
         else:
-            if Op.is_binary(self.op):
+            if self.var_idx != -1:
+                raise ValueError(f"Formula variable {self} must have an Formula Variable index = -1")
+            elif Op.is_binary(self.op):
                 is_valid = isinstance(self.left, Formula) and isinstance(self.right, Formula)
             elif Op.is_unary(self.op):
                 is_valid = isinstance(self.left, Formula) and self.right is None
+                if (self.op == Op.NOT and isinstance(self.left, Formula) and self.left.op == Op.Not):
+                    self = self.left.left
+                is_valid = self.validate_formula(self)
             elif Op.is_quantifier(self.op):
                 is_valid = isinstance(self.left, Variable) and isinstance(self.right, Formula)
             else:
@@ -163,7 +177,7 @@ class Formula:
         return ((self.op == other.op) and
                 (self.left == other.left) and
                 (self.right == other.right) and
-                (self.idx == other.idx))
+                (self.var_idx == other.var_idx))
     
     def __str__(self):
         return f"{str(self.op)}({str(self.left)},{str(self.right)})"
@@ -175,8 +189,8 @@ class FormulaVar(Formula):
     This workaround is used mostly because this is a proof assistant and we want to be able to refernce arbitrary
     formulas
     '''
-    def __init__(self, idx=0):
-        super().__init__(op=None, left=None, right=None, idx=idx)
+    def __init__(self, var_idx=0):
+        super().__init__(op=None, left=None, right=None, var_idx=var_idx)
     
     def __eq__(self, other):
         '''
@@ -185,10 +199,10 @@ class FormulaVar(Formula):
         :param self: Description
         :param other: Description
         '''
-        return self.idx == other.idx
+        return self.var_idx == other.var_idx
     
     def __str__(self):
-        return f"FormulaVar({self.idx})"
+        return f"FormulaVar({self.var_idx})"
 
 class Rule(Enum):
     '''
@@ -216,67 +230,156 @@ class Rule(Enum):
     OR_ELIM = 7
     NOT_INTR = 8
 
+class ProofLine:
+    def __init__(self, formula: Formula, depth=0, proof_num=0, is_hypothesis=False):
+        '''
+        Docstring for __init__
+        
+        :param formula: Formula of the proof line
+        :param depth: The depth of the subproof which this ProofLine is contained in
+        :param proof_num: The proof that the ProofLine is associated with
+        :param is_hypothesis: 
+        '''
+        self.formula = formula
+        self.depth = depth
+        self.proof_num = proof_num
+        self.is_hypothesis = is_hypothesis
+    
+    def __str__(self):
+        return f"ProofLine(Formula={str(self.formula)},depth={self.depth},proof_num={self.proof_num},is_hypotheses={self.is_hypothesis})"
+
+
 class Proof:
     def __init__(self, hypotheses):
-        self.hypotheses = hypotheses                        # List of initial assumptions
         self.proof_lines = [None] + hypotheses              # Proof in lines as list of Formulas, 1-indexed
+
+        # need to handle subproof line indexing (can do this through depth instead)
+
+    def add_hypothesis(self, hypothesis: ProofLine):
+        assert(hypothesis.is_hypothesis)
+        self.proof_lines.append(hypothesis)
     
-    def deduce(self, formula, rule, line_num_a=-1, line_num_b=-1):
+    def deduce(self, proof_line, rule, line_num_a=-1, line_num_b=-1, line_num_c=-1, line_num_d=-1):
         '''
-        Attempt to deduce the given formula given the rule supplied
+        Attempt to deduce the given proof line given the rule supplied
         
         :param self: Description
-        :param formula: Description
+        :param proof_line: Description
         :param rule: Description
         :param line_a: Description
         :param line_b: Description
         '''
+
+        if proof_line.is_hypothesis:
+            raise AssertionError(f"Cannot deduce a hypothesis {proof_line}, please use add_hypothesis instead.")
+
+        def assert_one_depth_lower(proof_line_1: ProofLine, proof_line_2: ProofLine):
+            # Defaults to true if proof_line_2 is None
+            assert(proof_line_2 is None or proof_line_1.depth == proof_line_2.depth - 1)
+
+        def assert_equal_depth(proof_line_1: ProofLine, proof_line_2: ProofLine):
+            assert(proof_line_1.depth == proof_line_2.depth)
+
+        formula = None if proof_line is None else proof_line.formula
         is_valid = False
         proof_line_a = None if line_num_a == -1 else self.proof_lines[line_num_a]
+        formula_a = None if proof_line_a is None else proof_line_a.formula
         proof_line_b = None if line_num_b == -1 else self.proof_lines[line_num_b]
-        print(proof_line_a)
-        print(proof_line_b)
-        match rule:
-            # Inference Rules
-            case Rule.AND_INTR:
-                if (formula.op == Op.AND and proof_line_a == formula.left and proof_line_b == formula.right):
-                    is_valid = True
-            case Rule.AND_ELIM:
-                if (proof_line_a.op == Op.AND and (proof_line_a.left == formula or proof_line_a.right == formula)):
-                    is_valid = True
-            case Rule.OR_INTR:
-                if (formula.op == Op.OR and proof_line_a == formula.left or proof_line_a == formula.right):
-                    is_valid = True
-            case Rule.IMP_ELIM:
-                if (proof_line_b.op == Op.IMPLIES and proof_line_b.left == proof_line_a and proof_line_b.right == formula):
-                    is_valid = True
-            case Rule.NOT_ELIM:
-                if proof_line_a == Formula(Op.NOT, proof_line_b) or proof_line_b == Formula(Op.NOT, proof_line_a):
-                    is_valid = True
+        formula_b = None if proof_line_b is None else proof_line_b.formula
+        proof_line_c = None if line_num_c == -1 else self.proof_lines[line_num_c]
+        formula_c = None if proof_line_c is None else proof_line_c.formula
+        proof_line_d = None if line_num_d == -1 else self.proof_lines[line_num_d]
+        formula_d = None if proof_line_d is None else proof_line_d.formula
 
-            # Supposition Rules
-            case Rule.IMP_INTR:
-                pass
-            case Rule.OR_ELIM:
-                pass
-            case Rule.NOT_INT:
-                pass
-            case _:
-                raise ValueError(f"Rule {rule} does not have a matching rule.")
+        try:
+            match rule:
+                # Inference Rules
+                case Rule.AND_INTR:
+                    assert_equal_depth(proof_line, proof_line_a)
+                    assert_equal_depth(proof_line, proof_line_b)
+                    if (formula.op == Op.AND and formula_a == formula.left and formula_b == formula.right):
+                        is_valid = True
+                case Rule.AND_ELIM:
+                    assert_equal_depth(proof_line, proof_line_a)
+                    if (formula_a.op == Op.AND and (formula_a.left == formula or formula_a.right == formula)):
+                        is_valid = True
+                case Rule.OR_INTR:
+                    assert_equal_depth(proof_line, proof_line_a)
+                    if (formula.op == Op.OR and formula_a == formula.left or formula_a == formula.right):
+                        is_valid = True
+                case Rule.IMP_ELIM:
+                    assert_equal_depth(proof_line, proof_line_a)
+                    assert_equal_depth(proof_line, proof_line_b)
+                    if (formula_b.op == Op.IMPLIES and formula_b.left == formula_a and formula_b.right == formula):
+                        is_valid = True
+                case Rule.NOT_ELIM:
+                    assert_equal_depth(proof_line, proof_line_a)
+                    assert_equal_depth(proof_line, proof_line_b)
+                    if formula_a == Formula(Op.NOT, formula_b) or formula_b == Formula(Op.NOT, formula_a):
+                        is_valid = True
 
-        if is_valid:
-            self.proof_lines.append(formula)
-        else:
-            raise AssertionError(f"Formula {formula} could not be deduced from the following lines:\n{proof_line_a}\n{proof_line_b}")
+                # Supposition Rules
+                case Rule.IMP_INTR:
+                    assert_one_depth_lower(proof_line, proof_line_a)
+                    assert_one_depth_lower(proof_line, proof_line_b)
+                    assert(proof_line_c is None and proof_line_d is None)
+                    assert(proof_line_a.is_hypothesis and not proof_line_b.is_hypothesis)
+                    if formula.op == Op.IMPLIES and formula.left == formula_a and formula.right == formula_b:
+                        is_valid = True
+                case Rule.OR_ELIM:
+                    assert_equal_depth(proof_line, proof_line_a)
+                    assert_one_depth_lower(proof_line, proof_line_b)
+                    assert_one_depth_lower(proof_line, proof_line_c)
+                    assert_one_depth_lower(proof_line, proof_line_d)
+                    if (formula_a.op == Op.OR and
+                          formula_a.left == formula_b and
+                          formula_a.right == formula_c and
+                          formula_b.proof_num == formula_d.proof_num and
+                          formula_c.proof_num == formula_d.proof_num and
+                          formula_b.is_hypothesis and
+                          formula_c.is_hypothesis and
+                          not formula_d.is_hypothesis
+                          ):
+                        is_valid = True
+                case Rule.NOT_INT:
+                    assert_one_depth_lower(proof_line, proof_line_a)
+                    assert_one_depth_lower(proof_line, proof_line_b)
+                    assert_one_depth_lower(proof_line, proof_line_c)
+                    if ((formula == Formula(op=Op.NOT, left=formula_a, right=None) or formula_a == Formula(op=Op.NOT, left=formula, right=None)) and
+                        formula_a.is_hypothesis and
+                        (formula_b == Formula(op=Op.NOT, left=formula_c, right=None) or formula_c == Formula(op=Op.NOT, left=formula_b, right=None))
+                        ):
+                        is_valid = True
+                case _:
+                    raise ValueError(f"Rule {rule} does not have a matching rule.")
 
+            if is_valid:
+                self.proof_lines.append(proof_line)
+            assert(is_valid)
+        except:
+            raise AssertionError(f"Proof line {proof_line} could not be deduced from the following lines:\n{proof_line_a}\n{proof_line_b}\n{proof_line_c}\n{proof_line_d}")
 
+def test_IMP_INTR():
+    p = Proof(hypotheses=[])
+    formula_1 = Formula(Op.AND, FormulaVar(1), FormulaVar(2))
+    proof_line_1 = ProofLine(formula=formula_1, depth=1, proof_num=0, is_hypothesis=True)
 
+    formula_2 = FormulaVar(1)
+    proof_line_2 = ProofLine(formula=FormulaVar(1), depth=1, proof_num=0)
 
+    proof_line_3 = ProofLine(formula=Formula(op=Op.IMPLIES, left=formula_1, right=formula_2), depth=0, proof_num=0)
+
+    p.add_hypothesis(proof_line_1)
+    p.deduce(proof_line=proof_line_2, rule=Rule.AND_ELIM, line_num_a=1)
+    p.deduce(proof_line=proof_line_3, rule=Rule.IMP_INTR, line_num_a=1, line_num_b=2)
+
+def test_OR_ELIM():
+    pass
 
 if __name__ == "__main__":
     # formula = Formula(Op.NOT, FormulaVar(1), FormulaVar(2))
-    formula = Formula(Op.AND, FormulaVar(1), FormulaVar(2))
-    p = Proof(hypotheses=[formula])
-    p.deduce(formula=FormulaVar(1), rule=Rule.AND_ELIM, line_num_a=1)
-    p.deduce(formula=Formula(Op.AND, FormulaVar(1), formula), rule=Rule.AND_INTR, line_num_a=2, line_num_b=1)
+
+    # p.deduce(proof_line=FormulaVar(1), rule=Rule.AND_ELIM, line_num_a=1)
+    # p.deduce(proof_line=Formula(Op.AND, FormulaVar(1), formula), rule=Rule.AND_INTR, line_num_a=2, line_num_b=1)
     # p.deduce(formula=Formula(Op.AND, FormulaVar(1), formula), rule=Rule.AND_INTR, line_num_a=1, line_num_b=2)
+    test_IMP_INTR()
